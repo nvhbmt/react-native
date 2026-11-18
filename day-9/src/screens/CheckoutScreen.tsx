@@ -1,0 +1,187 @@
+import { useEffect, useState } from "react";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { FormField } from "../components/FormField";
+import { PrimaryButton } from "../components/PrimaryButton";
+import { PaymentOption } from "../components/PaymentOption";
+import { createOrder } from "../services/orderService";
+import { getErrorMessage } from "../api/client";
+import { useAuth, useCart } from "../store/hooks";
+import { showMessage } from "../utils/dialog";
+import { validatePhone, validateRequired } from "../utils/validators";
+import { RootScreenProps } from "../navigation/types";
+import { PaymentMethod } from "../types";
+import { colors, formatPrice, radius } from "../theme";
+
+export function CheckoutScreen({
+  navigation,
+  route,
+}: RootScreenProps<"Checkout">) {
+  const { isLoggedIn, user } = useAuth();
+  const { items, clear } = useCart();
+  const total = route.params.total;
+
+  const [name, setName] = useState(user?.name ?? "");
+  const [phone, setPhone] = useState(user?.phone ?? "");
+  const [address, setAddress] = useState("");
+  const [payment, setPayment] = useState<PaymentMethod>("cod");
+  const [touched, setTouched] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Lớp bảo vệ — CÓ SẴN
+  useEffect(() => {
+    if (!isLoggedIn)
+      navigation.replace("Login", { redirectTo: "Checkout", total });
+  }, [isLoggedIn, navigation, total]);
+
+  // TODO BT9.1a: tính `errors` (name/phone/address) bằng validateRequired / validatePhone
+  // và `valid` = không còn lỗi && giỏ còn hàng. Hiện đang tạm = false nên nút luôn bị khoá.
+  const errors: {
+    name: string | null;
+    phone: string | null;
+    address: string | null;
+  } = {
+    name: validateRequired("Tên")(name),
+    phone: validatePhone(phone),
+    address: validateRequired("Địa chỉ")(address),
+  };
+  const valid = !Object.values(errors).some(Boolean) || items.length === 0;
+
+  const submit = async () => {
+    // TODO BT9.2: (1) setTouched(true); nếu !valid || !user thì return
+    setTouched(true);
+    if (!valid || !user) return;
+    // (2) bật loading, xoá submitError  (3) await createOrder({...})  (4) clear() giỏ
+    try {
+      setLoading(true);
+      setSubmitError(null);
+      await createOrder({
+        items,
+        address: {
+          name,
+          phone,
+          address,
+        },
+        paymentMethod: payment,
+        total: items.reduce((cur, item) => cur + item.price * item.quantity, 0),
+        userId: user.id,
+      });
+      clear();
+      // (5) showMessage("Đặt hàng thành công 🎉", ..., () => navigation.navigate("Tabs", { screen: "Home" }))
+      showMessage("Đặt hàng thành công 🎉", "Bạn đã đặt hàng thành công", () =>
+        navigation.navigate("Tabs", { screen: "Home" })
+      );
+      // (6) catch → setSubmitError(getErrorMessage(e)) và GIỮ NGUYÊN giỏ  (7) finally tắt loading
+    } catch (e) {
+      setSubmitError(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isLoggedIn) return null;
+
+  return (
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* CÓ SẴN: tóm tắt đơn hàng */}
+        <Text style={styles.h}>Đơn hàng ({items.length} sản phẩm)</Text>
+        <View style={styles.summary}>
+          {items.map((i) => (
+            <View key={i.bookId} style={styles.sumRow}>
+              <Text style={styles.sumTitle} numberOfLines={1}>
+                {i.title} × {i.quantity}
+              </Text>
+              <Text style={styles.sumPrice}>
+                {formatPrice(i.price * i.quantity)}
+              </Text>
+            </View>
+          ))}
+          <View style={[styles.sumRow, styles.sumTotal]}>
+            <Text style={styles.totalLabel}>Tổng thanh toán</Text>
+            <Text style={styles.totalValue}>{formatPrice(total)}</Text>
+          </View>
+        </View>
+
+        <Text style={styles.h}>Địa chỉ giao hàng</Text>
+        <FormField
+          label="Họ tên"
+          error={touched ? errors.name : null}
+          value={name}
+          onChangeText={setName}
+        />
+        <FormField
+          label="Số điện thoại"
+          error={touched ? errors.phone : null}
+          value={phone}
+          onChangeText={setPhone}
+        />
+        <FormField
+          label="Địa chỉ"
+          error={touched ? errors.address : null}
+          value={address}
+          onChangeText={setAddress}
+        />
+
+        <Text style={styles.h}>Phương thức thanh toán</Text>
+        <PaymentOption
+          label="COD"
+          onPress={() => setPayment("cod")}
+          selected={payment === "cod"}
+        />
+        <PaymentOption
+          label="Chuyển khoản"
+          onPress={() => setPayment("bank")}
+          selected={payment === "bank"}
+        />
+
+        {submitError ? <Text style={styles.error}>{submitError}</Text> : null}
+        {/* Nút đã nối sẵn: bị khoá cho đến khi bạn làm xong BT9.1a */}
+        <PrimaryButton
+          title="Xác nhận đặt hàng"
+          onPress={submit}
+          loading={loading}
+          disabled={!valid}
+        />
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg },
+  content: { padding: 16, gap: 12, paddingBottom: 40 },
+  h: { fontSize: 16, fontWeight: "800", color: colors.navy, marginTop: 6 },
+  summary: {
+    backgroundColor: "#fff",
+    borderRadius: radius.md,
+    padding: 12,
+    gap: 6,
+  },
+  sumRow: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
+  sumTitle: { flex: 1, color: colors.text },
+  sumPrice: { fontWeight: "700", color: colors.text },
+  sumTotal: {
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    paddingTop: 8,
+    marginTop: 4,
+  },
+  totalLabel: { fontWeight: "800", color: colors.navy },
+  totalValue: { fontWeight: "800", color: colors.indigo, fontSize: 18 },
+  error: { color: colors.danger, textAlign: "center" },
+});
